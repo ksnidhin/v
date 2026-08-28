@@ -167,9 +167,9 @@ async def pic_cmd(client: Client, message: Message):
 
         status_msg = await message.reply_text(f"📥 **Starting download of {total_photos} photos...**")
         
-        buffer = []
         sent_count = 0
         groups_sent_in_batch = 0
+        photo_batch = []
         
         async for photo in client.get_chat_photos(target):
             # Check for cancellation
@@ -177,17 +177,18 @@ async def pic_cmd(client: Client, message: Message):
                 await status_msg.edit_text("❌ **Cancelled.**")
                 return
                 
-            # Download photo in real-time
-            file_path = await client.download_media(photo.file_id, file_name=f"{temp_dir}/")
-            if file_path:
-                buffer.append(file_path)
+            photo_batch.append(photo)
                 
-            # When we hit 10 photos, send the album
-            if len(buffer) == 10:
+            # When we hit 10 photos, download and send them concurrently
+            if len(photo_batch) == 10:
+                tasks = [client.download_media(p.file_id, file_name=f"{temp_dir}/") for p in photo_batch]
+                downloaded_paths = await asyncio.gather(*tasks)
+                buffer = [fp for fp in downloaded_paths if fp]
+                
                 await send_album_with_retry(client, chat_id, buffer)
-                sent_count += 10
+                sent_count += len(buffer)
                 groups_sent_in_batch += 1
-                buffer.clear()
+                photo_batch.clear()
                 
                 await status_msg.edit_text(f"📤 **Sent {sent_count} / {total_photos} photos...**")
                 
@@ -210,10 +211,14 @@ async def pic_cmd(client: Client, message: Message):
                         await asyncio.sleep(1)
         
         # Send any remaining photos that didn't form a perfect 10
-        if buffer and chat_id in active_downloads:
+        if photo_batch and chat_id in active_downloads:
+            tasks = [client.download_media(p.file_id, file_name=f"{temp_dir}/") for p in photo_batch]
+            downloaded_paths = await asyncio.gather(*tasks)
+            buffer = [fp for fp in downloaded_paths if fp]
+            
             await send_album_with_retry(client, chat_id, buffer)
             sent_count += len(buffer)
-            buffer.clear()
+            photo_batch.clear()
             
         await status_msg.edit_text(f"✅ **Done! All {sent_count} photos delivered successfully.**")
         
@@ -252,19 +257,33 @@ async def zip_cmd(client: Client, message: Message):
         
         downloaded = 0
         file_paths = []
+        photo_batch = []
+        
         async for photo in client.get_chat_photos(target):
             if chat_id not in active_downloads:
                 await status_msg.edit_text("❌ **Cancelled.**")
                 return
             
-            fp = await client.download_media(photo.file_id, file_name=f"{temp_dir}/")
-            if fp:
-                file_paths.append(fp)
-                downloaded += 1
+            photo_batch.append(photo)
+            
+            # Download in chunks of 20 for speed
+            if len(photo_batch) == 20:
+                tasks = [client.download_media(p.file_id, file_name=f"{temp_dir}/") for p in photo_batch]
+                paths = await asyncio.gather(*tasks)
+                file_paths.extend([fp for fp in paths if fp])
+                downloaded += len(photo_batch)
+                photo_batch.clear()
                 
-                # Update status message occasionally to avoid FloodWaits on edits
-                if downloaded % 20 == 0 or downloaded == total_photos:
-                    await status_msg.edit_text(f"📥 **Downloading... {downloaded} / {total_photos}**")
+                await status_msg.edit_text(f"📥 **Downloading... {downloaded} / {total_photos}**")
+
+        # Flush remaining
+        if photo_batch and chat_id in active_downloads:
+            tasks = [client.download_media(p.file_id, file_name=f"{temp_dir}/") for p in photo_batch]
+            paths = await asyncio.gather(*tasks)
+            file_paths.extend([fp for fp in paths if fp])
+            downloaded += len(photo_batch)
+            photo_batch.clear()
+            await status_msg.edit_text(f"📥 **Downloading... {downloaded} / {total_photos}**")
 
         if chat_id not in active_downloads:
             return
