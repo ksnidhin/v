@@ -7,12 +7,16 @@ from pyrogram import Client, filters
 from pyrogram.types import InputMediaPhoto, Message
 from pyrogram.errors import FloodWait
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Replace these with your actual credentials
-API_ID = int(os.environ.get("API_ID", "1234567"))
-API_HASH = os.environ.get("API_HASH", "your_api_hash_here")
+# These will be loaded from the .env file
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
 SESSION_NAME = "violet_standalone_userbot"
 
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
