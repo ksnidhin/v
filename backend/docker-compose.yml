@@ -1,0 +1,69 @@
+services:
+  wordpress_db:
+    image: mariadb:10.11
+    container_name: watch_platform_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: watch_db_root_secret
+      MYSQL_DATABASE: watch_woocommerce
+      MYSQL_USER: watch_db_user
+      MYSQL_PASSWORD: watch_db_password
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - watch_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: watch_platform_redis
+    restart: always
+    networks:
+      - watch_net
+
+  wordpress:
+    image: wordpress:6.5-php8.3-apache
+    container_name: watch_platform_wp
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: wordpress_db:3306
+      WORDPRESS_DB_NAME: watch_woocommerce
+      WORDPRESS_DB_USER: watch_db_user
+      WORDPRESS_DB_PASSWORD: watch_db_password
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_REDIS_HOST', 'redis');
+        define('WP_ENVIRONMENT_TYPE', 'local');
+        define('WC_HIGH_PERFORMANCE_ORDER_STORAGE_ONLY', true);
+    volumes:
+      - ./wp-content:/var/www/html/wp-content
+      - ./config/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini
+    depends_on:
+      - wordpress_db
+      - redis
+    networks:
+      - watch_net
+
+  wpcli:
+    image: wordpress:cli-2.10-php8.3
+    container_name: watch_platform_wpcli
+    volumes:
+      - ./wp-content:/var/www/html/wp-content
+      - ./scripts:/scripts
+    user: 33:33 # www-data
+    environment:
+      WORDPRESS_DB_HOST: wordpress_db:3306
+      WORDPRESS_DB_NAME: watch_woocommerce
+      WORDPRESS_DB_USER: watch_db_user
+      WORDPRESS_DB_PASSWORD: watch_db_password
+    depends_on:
+      - wordpress
+    networks:
+      - watch_net
+
+networks:
+  watch_net:
+    driver: bridge
+
+volumes:
+  db_data:
