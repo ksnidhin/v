@@ -53,6 +53,22 @@ def get_target(message: Message):
     return None
 
 async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
+    if not file_paths:
+        return
+        
+    # If there's only 1 photo left, we must use send_photo because send_media_group requires 2+
+    if len(file_paths) == 1:
+        while True:
+            try:
+                await client.send_photo(chat_id=chat_id, photo=file_paths[0])
+                break
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 0.5)
+            except Exception as e:
+                print(f"Error sending single photo: {e}")
+                break
+        return
+
     media = [InputMediaPhoto(fp) for fp in file_paths]
     while True:
         try:
@@ -141,6 +157,7 @@ async def pic_cmd(client: Client, message: Message):
             return
 
         status_msg = await message.reply_text(f"📥 **Starting progressive delivery of {total_photos} photos...**")
+        start_time = time.time()
         
         task_queue = asyncio.Queue()
         result_queue = asyncio.Queue()
@@ -153,7 +170,7 @@ async def pic_cmd(client: Client, message: Message):
                 photo, idx = data
                 try:
                     if chat_id in active_downloads:
-                        fp = await client.download_media(photo.file_id, file_name=f"{temp_dir}/{idx}_")
+                        fp = await client.download_media(photo.file_id, file_name=f"{temp_dir}/{idx}.jpg")
                         if fp:
                             await result_queue.put((idx, fp))
                 except Exception as e:
@@ -219,7 +236,8 @@ async def pic_cmd(client: Client, message: Message):
         await consumer_task
         
         if chat_id in active_downloads:
-            await status_msg.edit_text(f"✅ **Done! Pipeline completed. Delivered {total_photos} photos.**")
+            elapsed = round(time.time() - start_time, 2)
+            await status_msg.edit_text(f"✅ **Done! Pipeline completed.**\n📸 Delivered: `{total_photos}` photos\n⏱️ Time taken: `{elapsed}s`")
         
     except Exception as e:
         await message.reply_text(f"❌ **Error:** `{e}`")
@@ -252,6 +270,7 @@ async def zip_cmd(client: Client, message: Message):
             return
 
         status_msg = await message.reply_text(f"📥 **Downloading {total_photos} photos for ZIP (Fast Concurrent)...**")
+        start_time = time.time()
         
         task_queue = asyncio.Queue()
         file_paths = []
@@ -264,7 +283,7 @@ async def zip_cmd(client: Client, message: Message):
                 photo, idx = data
                 try:
                     if chat_id in active_downloads:
-                        fp = await client.download_media(photo.file_id, file_name=f"{temp_dir}/{idx}_")
+                        fp = await client.download_media(photo.file_id, file_name=f"{temp_dir}/{idx}.jpg")
                         if fp:
                             file_paths.append((idx, fp))
                             downloaded = len(file_paths)
@@ -306,7 +325,9 @@ async def zip_cmd(client: Client, message: Message):
 
         await status_msg.edit_text("📤 **Uploading ZIP...**")
         await client.send_document(chat_id, document=zip_name)
-        await status_msg.edit_text("✅ **Done! ZIP delivered.**")
+        
+        elapsed = round(time.time() - start_time, 2)
+        await status_msg.edit_text(f"✅ **Done! ZIP delivered.**\n⏱️ Time taken: `{elapsed}s`")
         
     except Exception as e:
         await message.reply_text(f"❌ **Error:** `{e}`")
