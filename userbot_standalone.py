@@ -8,6 +8,9 @@ from pyrogram.types import InputMediaPhoto, Message
 from pyrogram.errors import FloodWait
 
 from dotenv import load_dotenv
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
@@ -89,11 +92,16 @@ async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
 
 @app.on_message(filters.command(["start", "help"], prefixes=["/", ".", "!"]))
 async def start_cmd(client: Client, message: Message):
-    await message.reply_animation(
-        animation=START_GIF_URL,
-        caption=MENU_TEXT,
-        quote=True
-    )
+    print(f"➡️ Received command: {message.text} in chat {message.chat.id}")
+    try:
+        await message.reply_animation(
+            animation=START_GIF_URL,
+            caption=MENU_TEXT,
+            quote=True
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to send GIF: {e}. Sending text instead.")
+        await message.reply_text(text=MENU_TEXT, quote=True)
 
 
 @app.on_message(filters.command("cancel", prefixes=["/", ".", "!"]))
