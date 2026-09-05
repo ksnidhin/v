@@ -25,7 +25,7 @@ active_downloads = set()
 START_GIF_URL = "https://media.tenor.com/n14aVlDOPv8AAAAC/anime-hello.gif"
 
 MENU_TEXT = """
-**🌟 𝓥𝓲𝓸𝓵𝓮𝓽 𝓤𝓼𝓮𝓻𝓫𝓸𝓽 🌟**
+**🌟 wassup gng 🌟**
 
 ✨ *Welcome! I am operating entirely as a userbot.* ✨
 
