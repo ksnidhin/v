@@ -81,6 +81,50 @@ async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
             print(f"Error sending album: {e}")
             break
 
+# ==========================================
+# ANTI-AD MODERATION MODULE
+# ==========================================
+# Runs in group -1 so it intercepts spam before other commands
+@app.on_message(filters.group & ~filters.me, group=-1)
+async def anti_ad_worker(client: Client, message: Message):
+    # Only target messages that have inline keyboards (the primary signature of bot ads)
+    if getattr(message, "reply_markup", None) is None:
+        return
+    if not hasattr(message.reply_markup, "inline_keyboard"):
+        return
+
+    text = (message.text or message.caption or "").lower()
+    raw_text = message.text or message.caption or ""
+    
+    # Signature 1: Has Media
+    has_media = bool(message.photo or message.animation or message.video or message.document)
+    
+    # Signature 2: Aggressive Ad Keywords
+    ad_keywords = [
+        "join channel", "get premium", "special announcement", 
+        "massive update", "click the button", "discount",
+        "crypto", "airdrop", "giveaway", "bonus", "investment",
+        "join now", "subscribe", "limited time"
+    ]
+    has_ad_keyword = any(kw in text for kw in ad_keywords)
+    
+    # Signature 3: Heavy Emoji Usage
+    ad_emojis = ["🚨", "🔥", "🚀", "💎", "🎁", "👇", "👉", "💯", "✅", "💸", "💰", "⚠️"]
+    emoji_count = sum(1 for char in raw_text if char in ad_emojis)
+    
+    # If it has inline buttons AND matches typical ad formatting, strike it down!
+    if has_media or has_ad_keyword or emoji_count >= 2:
+        try:
+            await message.delete()
+            print(f"🗑️ Anti-Ad: Deleted promotional bot message in '{message.chat.title}'")
+        except Exception:
+            # Silently ignore if the userbot lacks admin/delete permissions in this specific group
+            pass
+
+
+# ==========================================
+# BOT COMMANDS
+# ==========================================
 @app.on_message(filters.command(["start", "help"], prefixes=["/", ".", "!"]))
 async def start_cmd(client: Client, message: Message):
     print(f"➡️ Received command: {message.text} in chat {message.chat.id}")
