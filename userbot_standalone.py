@@ -103,7 +103,7 @@ async def solve_scrambled_word(scrambled: str) -> str:
         
     try:
         completion = await groq_client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             messages=[
                 {
                     "role": "system", 
