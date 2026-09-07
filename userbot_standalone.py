@@ -3,9 +3,10 @@ import asyncio
 import zipfile
 import shutil
 import time
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import InputMediaPhoto, Message
 from pyrogram.errors import FloodWait
+from pyrogram.enums import MessageEntityType
 
 from dotenv import load_dotenv
 import logging
@@ -56,7 +57,6 @@ async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
     if not file_paths:
         return
         
-    # If there's only 1 photo left, we must use send_photo because send_media_group requires 2+
     if len(file_paths) == 1:
         while True:
             try:
@@ -84,43 +84,93 @@ async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
 # ==========================================
 # ANTI-AD MODERATION MODULE
 # ==========================================
-# Runs in group -1 so it intercepts spam before other commands
-@app.on_message(filters.group & ~filters.me, group=-1)
-async def anti_ad_worker(client: Client, message: Message):
-    # Only target messages that have inline keyboards (the primary signature of bot ads)
-    if getattr(message, "reply_markup", None) is None:
-        return
-    if not hasattr(message.reply_markup, "inline_keyboard"):
-        return
+def is_promotional_ad(message: Message) -> bool:
+    if not message:
+        return False
+        
+    is_bot_sender = False
+    
+    # 1. Sent by a traditional bot account (including admin bots)
+    if message.from_user and message.from_user.is_bot:
+        is_bot_sender = True
+        
+    # 2. Sent anonymously by a channel posing in the group
+    if message.sender_chat and message.sender_chat.id != message.chat.id:
+        is_bot_sender = True
+        
+    # 3. Contains inline buttons (definitive proof of bot/API usage)
+    has_inline_keyboard = getattr(message, "reply_markup", None) is not None and hasattr(message.reply_markup, "inline_keyboard")
+    
+    # We only care if it's sent by a bot, anonymous channel, or uses inline buttons
+    if not (is_bot_sender or has_inline_keyboard):
+        return False
 
     text = (message.text or message.caption or "").lower()
     raw_text = message.text or message.caption or ""
     
-    # Signature 1: Has Media
     has_media = bool(message.photo or message.animation or message.video or message.document)
     
-    # Signature 2: Aggressive Ad Keywords
+    # Check for promotional links
+    has_links = False
+    ents = message.entities or message.caption_entities
+    if ents:
+        if any(e.type in [MessageEntityType.URL, MessageEntityType.TEXT_LINK] for e in ents):
+            has_links = True
+
     ad_keywords = [
         "join channel", "get premium", "special announcement", 
         "massive update", "click the button", "discount",
         "crypto", "airdrop", "giveaway", "bonus", "investment",
-        "join now", "subscribe", "limited time"
+        "join now", "subscribe", "limited time", "t.me/"
     ]
     has_ad_keyword = any(kw in text for kw in ad_keywords)
     
-    # Signature 3: Heavy Emoji Usage
     ad_emojis = ["🚨", "🔥", "🚀", "💎", "🎁", "👇", "👉", "💯", "✅", "💸", "💰", "⚠️"]
     emoji_count = sum(1 for char in raw_text if char in ad_emojis)
     
-    # If it has inline buttons AND matches typical ad formatting, strike it down!
-    if has_media or has_ad_keyword or emoji_count >= 2:
+    # If it's a bot/channel message AND contains promotional signatures
+    if has_inline_keyboard or has_links or has_media:
+        if has_ad_keyword or emoji_count >= 2:
+            return True
+            
+    return False
+
+# Live Interceptor (Group -1 runs before all other commands)
+@app.on_message(filters.group & ~filters.me, group=-1)
+async def anti_ad_worker(client: Client, message: Message):
+    if is_promotional_ad(message):
         try:
             await message.delete()
-            print(f"🗑️ Anti-Ad: Deleted promotional bot message in '{message.chat.title}'")
+            print(f"🗑️ Anti-Ad (Live): Deleted promotional bot message in '{message.chat.title}'")
         except Exception:
-            # Silently ignore if the userbot lacks admin/delete permissions in this specific group
             pass
 
+# Scheduled Background Scanner
+async def hourly_scanner(client: Client):
+    print("🕒 Hourly background scanner activated.")
+    while True:
+        await asyncio.sleep(3600)  # Wait 1 hour (3600 seconds)
+        print("🕒 Hourly scanner waking up to check for missed spam...")
+        try:
+            # Iterate through all dialogs to find groups
+            async for dialog in client.get_dialogs():
+                chat = dialog.chat
+                if chat.type.name in ["GROUP", "SUPERGROUP"]:
+                    try:
+                        # Check the last 100 messages of the group
+                        async for msg in client.get_chat_history(chat.id, limit=100):
+                            if is_promotional_ad(msg):
+                                try:
+                                    await msg.delete()
+                                    print(f"🗑️ Anti-Ad (Scanner): Deleted missed ad in '{chat.title}'")
+                                except Exception:
+                                    pass # No delete permissions here
+                    except Exception:
+                        pass
+                    # Small sleep to prevent API flood wait from scanning many groups
+                    await asyncio.sleep(1)
+        except Exception as e:
+            print(f"⚠️ Scanner error: {e}")
 
 # ==========================================
 # BOT COMMANDS
@@ -380,6 +430,16 @@ async def zip_cmd(client: Client, message: Message):
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
+# Instead of just app.run(), we define a custom main loop to support background tasks
+async def main():
+    async with app:
+        print("🌟 Violet Userbot connected.")
+        # Start the background scanner that runs every 1 hour
+        asyncio.create_task(hourly_scanner(app))
+        print("🌟 Hourly scanner is active.")
+        # Keep the client running to receive events
+        await idle()
+
 if __name__ == "__main__":
     print("🌟 Violet Userbot is starting...")
-    app.run()
+    app.run(main())
