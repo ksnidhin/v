@@ -3,10 +3,16 @@ import asyncio
 import zipfile
 import shutil
 import time
+import re
 from pyrogram import Client, filters, idle
 from pyrogram.types import InputMediaPhoto, Message
 from pyrogram.errors import FloodWait
 from pyrogram.enums import MessageEntityType
+
+try:
+    from groq import AsyncGroq
+except ImportError:
+    AsyncGroq = None
 
 from dotenv import load_dotenv
 import logging
@@ -18,6 +24,7 @@ load_dotenv()
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION_NAME = "violet_standalone_userbot"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
 
@@ -82,6 +89,57 @@ async def send_album_with_retry(client: Client, chat_id: int, file_paths: list):
             break
 
 # ==========================================
+# ANAGRAM GAME AUTO-SOLVER (GROQ API)
+# ==========================================
+if AsyncGroq and GROQ_API_KEY:
+    groq_client = AsyncGroq(api_key=GROQ_API_KEY)
+else:
+    groq_client = None
+
+async def solve_scrambled_word(scrambled: str) -> str:
+    if not groq_client:
+        print("⚠️ Groq client not initialized. Install 'groq' package and set GROQ_API_KEY.")
+        return ""
+        
+    try:
+        completion = await groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a highly advanced anagram solver. The user will give you a scrambled sequence of letters. Respond with EXACTLY ONE unscrambled dictionary word in lowercase. Do not include any punctuation, spaces, quotes, or conversational text. Just the single word."
+                },
+                {"role": "user", "content": scrambled}
+            ],
+            temperature=0.0,
+            max_tokens=15
+        )
+        return completion.choices[0].message.content.strip().lower()
+    except Exception as e:
+        print(f"⚠️ Groq API Error: {e}")
+        return ""
+
+@app.on_message(filters.group & filters.text & ~filters.me)
+async def scramble_game_worker(client: Client, message: Message):
+    text = message.text or ""
+    
+    # Check if it matches the specific bot game format
+    if "Scrambled Word Challenge!" in text and "Word:" in text:
+        match = re.search(r"Word:\s*([A-Za-z]+)", text)
+        if match:
+            scrambled_word = match.group(1)
+            print(f"🧩 Detected scramble game! Word: {scrambled_word}")
+            
+            answer = await solve_scrambled_word(scrambled_word)
+            if answer:
+                # Some LLMs might accidentally include punctuation like "fairly."
+                clean_answer = re.sub(r"[^a-z]", "", answer)
+                print(f"💡 Groq Solved it: {clean_answer}. Sending to group!")
+                
+                # Send the answer directly into the chat
+                await client.send_message(chat_id=message.chat.id, text=clean_answer)
+
+# ==========================================
 # ANTI-AD MODERATION MODULE
 # ==========================================
 def is_promotional_ad(message: Message) -> bool:
@@ -90,18 +148,14 @@ def is_promotional_ad(message: Message) -> bool:
         
     is_bot_sender = False
     
-    # 1. Sent by a traditional bot account (including admin bots)
     if message.from_user and message.from_user.is_bot:
         is_bot_sender = True
         
-    # 2. Sent anonymously by a channel posing in the group
     if message.sender_chat and message.sender_chat.id != message.chat.id:
         is_bot_sender = True
         
-    # 3. Contains inline buttons (definitive proof of bot/API usage)
     has_inline_keyboard = getattr(message, "reply_markup", None) is not None and hasattr(message.reply_markup, "inline_keyboard")
     
-    # We only care if it's sent by a bot, anonymous channel, or uses inline buttons
     if not (is_bot_sender or has_inline_keyboard):
         return False
 
@@ -110,7 +164,6 @@ def is_promotional_ad(message: Message) -> bool:
     
     has_media = bool(message.photo or message.animation or message.video or message.document)
     
-    # Check for promotional links
     has_links = False
     ents = message.entities or message.caption_entities
     if ents:
@@ -128,14 +181,12 @@ def is_promotional_ad(message: Message) -> bool:
     ad_emojis = ["🚨", "🔥", "🚀", "💎", "🎁", "👇", "👉", "💯", "✅", "💸", "💰", "⚠️"]
     emoji_count = sum(1 for char in raw_text if char in ad_emojis)
     
-    # If it's a bot/channel message AND contains promotional signatures
     if has_inline_keyboard or has_links or has_media:
         if has_ad_keyword or emoji_count >= 2:
             return True
             
     return False
 
-# Live Interceptor (Group -1 runs before all other commands)
 @app.on_message(filters.group & ~filters.me, group=-1)
 async def anti_ad_worker(client: Client, message: Message):
     if is_promotional_ad(message):
@@ -145,29 +196,25 @@ async def anti_ad_worker(client: Client, message: Message):
         except Exception:
             pass
 
-# Scheduled Background Scanner
 async def hourly_scanner(client: Client):
     print("🕒 Hourly background scanner activated.")
     while True:
-        await asyncio.sleep(3600)  # Wait 1 hour (3600 seconds)
+        await asyncio.sleep(3600)
         print("🕒 Hourly scanner waking up to check for missed spam...")
         try:
-            # Iterate through all dialogs to find groups
             async for dialog in client.get_dialogs():
                 chat = dialog.chat
                 if chat.type.name in ["GROUP", "SUPERGROUP"]:
                     try:
-                        # Check the last 100 messages of the group
                         async for msg in client.get_chat_history(chat.id, limit=100):
                             if is_promotional_ad(msg):
                                 try:
                                     await msg.delete()
                                     print(f"🗑️ Anti-Ad (Scanner): Deleted missed ad in '{chat.title}'")
                                 except Exception:
-                                    pass # No delete permissions here
+                                    pass
                     except Exception:
                         pass
-                    # Small sleep to prevent API flood wait from scanning many groups
                     await asyncio.sleep(1)
         except Exception as e:
             print(f"⚠️ Scanner error: {e}")
@@ -430,14 +477,11 @@ async def zip_cmd(client: Client, message: Message):
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
-# Instead of just app.run(), we define a custom main loop to support background tasks
 async def main():
     async with app:
         print("🌟 Violet Userbot connected.")
-        # Start the background scanner that runs every 1 hour
         asyncio.create_task(hourly_scanner(app))
         print("🌟 Hourly scanner is active.")
-        # Keep the client running to receive events
         await idle()
 
 if __name__ == "__main__":
